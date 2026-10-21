@@ -9,7 +9,7 @@
 //! singularity searches through `SmFindSilSingEFO`), `LocalPointSolve`, `DoesPointLieOnCurve`,
 //! `FindSolutionsOnBoundaryCurve` and `BranchMayContainAnswers` on hand-built surface cache
 //! trees, and the whole `SmSurface::CreateSilhouetteCurves` of the case (`create`, in a quarter
-//! of the generated cases). Both sides produce the record documented in the ffi module, reported as the values
+//! of the generated B-spline cases). Both sides produce the record documented in the ffi module, reported as the values
 //! `rec`.
 //!
 //! Deferred cases: `SmSurface::EvaluateNormal` on B-spline surfaces and `SmSurface::DropVectors`
@@ -1147,8 +1147,9 @@ fn gen_inputs(rng: &mut Rng) -> Inputs {
             });
         }
     }
-    // the last draw of a case, so the cases before it are unchanged
-    if rng.chance(0.25) {
+    // the last draw of a case, so the cases before it are unchanged; B-spline surfaces
+    // only (a plane's surface cache needs `SmPlane::CreateIsoParametricCurve`, a stub)
+    if matches!(surface, SurfIn::Bspline(_)) && rng.chance(0.25) {
         ops.push(OpIn::Create {});
     }
     Inputs {
