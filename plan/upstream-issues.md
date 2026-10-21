@@ -1936,6 +1936,15 @@ meantime, whoever merges renumbers the new entry and every reference to it (here
 - **Severity:** hang.
 - **Rust port:** Stops after `MAX_TOL_DOUBLINGS` (2200) doublings with `SolidError::InvalidInput`.
 
+#### HANG-47. A heal topology op on a face does not always return for a surface control point beyond 1e154
+- **Location:** the `heal.gap` shim's topology op (`harness/cpp/shim/heal_gap.cpp`, op `Topo`, kind 1) on a face built from a B-spline surface; the stuck loop was not isolated (the squared-distance overflow class of HANG-16, HANG-19, HANG-37 and HANG-46).
+- **What happens:** With one surface control point coordinate in the overflow range, the op gives no result within 60 s for some values and returns at once for others: `-1e300` and `-1e155` hang, `-1e200`, `-1e160`, `-1e154`, `-1e153`, `-1e150`, `-1e100`, `-1e20` return in 0.0-0.5 s.
+- **Trigger:** `--fuzz 30000` of `heal.gap`, `fuzz14876` (base `gen0019`, `/brep/surface/bspline/net/1/3/1 = -1e300`; its other mutations, `/sel0 = 4294967296` and `oob`, are not needed).
+- **How found:** `--fuzz 30000` on main `16f04231`; values by replaying the case with that coordinate replaced (60 s limit per run).
+- **Confirmed:** yes (no result within 60 s for two values; infinite execution not proven).
+- **Severity:** hang on out-of-range geometry; not a parity blocker.
+- **Rust port:** the `heal.gap` FFI's `topo` refuses a B-rep block with any value of `MAX_TOPO_BLOCK_VALUE = 1e154` or more (the format's `+-f64::MAX` markers aside), and the runner's Rust side runs the same check.
+
 ## Nondeterminism
 
 #### ND-1. `srand(time(NULL))` in face sampling and shell classification
