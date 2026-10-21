@@ -27,7 +27,7 @@ fn torus(k: &Kernel) -> SurfOfRevolution {
         Vec3::new(0.0, 0.0, 0.0),
         Vec3::new(1.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
-        Extent2d::from_bounds(0.0, 360.0, 0.0, 360.0),
+        Extent2d::from_bounds(0.0, 0.0, 360.0, 360.0),
         false,
     )
     .unwrap();
@@ -40,7 +40,7 @@ fn diag_386() {
     let k = Kernel::default();
     for (v0, v1) in [(-23.7, 156.3), (0.0, 180.0), (336.3, 516.3), (-360.0 - 23.7, -360.0 + 156.3)] {
         let mut s = torus(&k);
-        let r = s.adjust_step_uv_domain(&k, &Extent2d::from_bounds(0.0, 360.0, v0, v1));
+        let r = s.adjust_step_uv_domain(&k, &Extent2d::from_bounds(0.0, v0, 360.0, v1));
         let surf = Surface::from(s.clone());
         let d = surf.natural_uv_domain();
         let mut worst = 0.0f64;
