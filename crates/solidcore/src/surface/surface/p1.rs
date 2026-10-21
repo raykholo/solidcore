@@ -120,7 +120,7 @@ use crate::geom::local_solve1d::{EvalFunction, FunctionValue};
 use crate::geom::object::ObjectRef;
 use crate::geom::polar_box::PolarBox;
 use crate::geom::pseudo_box::PseudoBox;
-use crate::geom::solution_array::SolutionObject;
+use crate::geom::solution_array::{ObjectKind, SolutionObject};
 use crate::geom::tol::{
     is_zero_to_tol, scaled_zero2, tol3d, zone_tol_3d as kernel_zone_tol_3d, ScaledZero,
     SmallTopoType, ANG_TOL_RAD,
@@ -966,14 +966,14 @@ pub fn get_surface_cache<O: Copy + PartialEq>(
     }
 }
 
-/// The object a silhouette curve's property solutions name (upstream the curve
-/// itself; nothing reads it back).
+/// The object the property solutions of `CreateSilhouetteCurves` name: a silhouette
+/// curve (upstream the curve itself; nothing reads it back).
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct SilhouetteCurve;
+struct SilhouetteObject;
 
-impl crate::geom::solution_array::SolutionObject for SilhouetteCurve {
-    fn kind(&self) -> crate::geom::solution_array::ObjectKind {
-        crate::geom::solution_array::ObjectKind::Curve
+impl SolutionObject for SilhouetteObject {
+    fn kind(&self) -> ObjectKind {
+        ObjectKind::Curve
     }
 }
 
@@ -1813,7 +1813,7 @@ impl Surface {
         ang_tol_rad: Option<f64>,
     ) -> Result<(Vec<Curve>, Vec<Curve>)> {
         const OP: &str = "surface::surface::p1::Surface::create_silhouette_curves";
-        let mut cache = get_surface_cache::<()>(k, self, None)?;
+        let mut cache = get_surface_cache::<SilhouetteObject>(k, self, None)?;
 
         // Check to make sure internal surface continuities are better then C0 (the
         // check only signals upstream)
@@ -1837,8 +1837,9 @@ impl Surface {
                     .filter(|c| matches!(c.kind(), CurveKind::BSpline(_)))
                     .ok_or_else(|| SolidError::null_pointer(OP))?;
                 let mut ivl = curve.natural_interval();
-                let opts = PropertyAnalysisOptions::<SilhouetteCurve> {
+                let opts = PropertyAnalysisOptions {
                     opt_vectors: &view,
+                    handle: Some(SilhouetteObject),
                     ..PropertyAnalysisOptions::default()
                 };
                 let solutions = curve
