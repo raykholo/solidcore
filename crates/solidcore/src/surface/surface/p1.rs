@@ -104,6 +104,7 @@
 use crate::curve::curve::p2::CurvePropertyType;
 use crate::curve::curve::p7::PropertyAnalysisOptions;
 use crate::curve::curve::Curve;
+use crate::curve::curve::CurveKind;
 use crate::curve::iso_curve::IsoCurve;
 use crate::curve::line::Line;
 use crate::error::{ignore_status, ignored, Result, SolidError};
@@ -962,6 +963,17 @@ pub fn get_surface_cache<O: Copy + PartialEq>(
         Err(e @ SolidError::Unported { .. }) => Err(e),
         // else - get or make SurfaceCache
         Err(_) => make_surface_cache(k, surface, handle),
+    }
+}
+
+/// The object a silhouette curve's property solutions name (upstream the curve
+/// itself; nothing reads it back).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SilhouetteCurve;
+
+impl crate::geom::solution_array::SolutionObject for SilhouetteCurve {
+    fn kind(&self) -> crate::geom::solution_array::ObjectKind {
+        crate::geom::solution_array::ObjectKind::Curve
     }
 }
 
@@ -1825,7 +1837,7 @@ impl Surface {
                     .filter(|c| matches!(c.kind(), CurveKind::BSpline(_)))
                     .ok_or_else(|| SolidError::null_pointer(OP))?;
                 let mut ivl = curve.natural_interval();
-                let opts = PropertyAnalysisOptions::<()> {
+                let opts = PropertyAnalysisOptions::<SilhouetteCurve> {
                     opt_vectors: &view,
                     ..PropertyAnalysisOptions::default()
                 };
