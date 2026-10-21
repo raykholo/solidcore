@@ -91,6 +91,12 @@
 //!   new object and are dropped. Arguments upstream marks `NotUsed`
 //!   (`CreateArcFromPoints`' dimension, `EditEndPoint`'s end type and heal flag) are
 //!   dropped too.
+//! - **Canonical knots.** `CreateCanonical` appends every copy of each knot (a
+//!   multiplicity read into a `long`, so one above `i64::MAX` adds none) and its NLib
+//!   entity then reads only the first `n + p + 2`; [`BSplineCurve::create_canonical`]
+//!   keeps that prefix and counts the rest, so a huge multiplicity costs no memory
+//!   (upstream's appends run until allocation fails). The trim knots and the
+//!   too-few-knots check use the full count, as upstream.
 //! - **Errors.** Out-params become return values. A failing NLib routine becomes
 //!   `SM_ERR` ([`SolidError::Upstream`], code 1001), as upstream's
 //!   `if(NL_YES == ...) SER(SM_ERR)`; `SM_ERR_INVALID_INPUT` checks are
@@ -1350,14 +1356,46 @@ impl BSplineCurve {
             }
         }
 
-        // Make compatible knots array
-        let mut new_knots = Vec::new();
+        // Make compatible knots array. Upstream reads each multiplicity into a `long`
+        // (one above `i64::MAX` wraps negative and adds no knot) and appends every
+        // copy; only the first `n + p + 2` knots are read afterwards (the NLib
+        // entity), plus the two trim knots and the total count, so the port keeps
+        // that prefix and counts the rest instead of allocating it.
+        let mut runs = Vec::new();
         for (i, &knot) in knots.iter().enumerate() {
             let mult = *knot_multiplicities
                 .get(i)
                 .ok_or_else(|| invalid(OP_CANON, "fewer multiplicities than knots"))?;
-            for _ in 0..mult {
-                new_knots.push(knot);
+            let mult = if i64::try_from(mult).is_ok() { mult } else { 0 };
+            runs.push((knot, mult));
+        }
+        let total = runs
+            .iter()
+            .try_fold(0_usize, |acc, &(_, m)| acc.checked_add(m))
+            .ok_or_else(|| invalid(OP_CANON, "knot multiplicities overflow"))?;
+        let knot_at = |index: usize| {
+            let mut at = index;
+            runs.iter().find_map(|&(knot, m)| {
+                if at < m {
+                    Some(knot)
+                } else {
+                    at -= m;
+                    None
+                }
+            })
+        };
+        let kept = total.min(
+            control_points
+                .len()
+                .saturating_add(degree)
+                .saturating_add(1),
+        );
+        let mut new_knots = Vec::with_capacity(kept);
+        for &(knot, m) in &runs {
+            let take = m.min(kept - new_knots.len());
+            new_knots.extend(core::iter::repeat_n(knot, take));
+            if new_knots.len() == kept {
+                break;
             }
         }
 
@@ -1381,10 +1419,10 @@ impl BSplineCurve {
             [t.min(), t.max()]
         } else {
             let short = || invalid(OP_CANON, "too few knots");
-            let last = new_knots.len().checked_sub(p + 1).ok_or_else(short)?;
+            let last = total.checked_sub(p + 1).ok_or_else(short)?;
             [
-                new_knots.get(p).copied().ok_or_else(short)?,
-                new_knots.get(last).copied().ok_or_else(short)?,
+                knot_at(p).ok_or_else(short)?,
+                knot_at(last).ok_or_else(short)?,
             ]
         };
 
@@ -1727,6 +1765,32 @@ fn matrix_of(m: &[[f64; 4]; 4]) -> Result<RealMatrix> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--fuzz 30000` of `primitive.api_curves` (fuzz00168 and 241 more): a knot
+    /// multiplicity of `2^32` aborted allocating the knot vector. Only the knots the
+    /// entity reads are kept now; the result is the one of the counted vector.
+    #[test]
+    fn huge_knot_multiplicity_allocates_only_the_read_knots() {
+        let pts = [Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)];
+        let data = |mults: &'static [usize]| CanonicalData {
+            dim: 3,
+            degree: 1,
+            control_points: &pts,
+            form: BSplineCurveForm::Unspecified,
+            knot_multiplicities: mults,
+            knots: &[0.0, 1.0],
+            knot_type: KnotType::Unspecified,
+            weights: None,
+            trim: None,
+        };
+        let plain = BSplineCurve::create_canonical(&data(&[2, 2])).unwrap();
+        assert_eq!(plain.natural_interval(), Extent1d::from_min_max(0.0, 1.0));
+        // the trim knots come from the full count: [0 x 2, 1 x 2^32], last = index 2^32
+        let huge = BSplineCurve::create_canonical(&data(&[2, 1 << 32])).unwrap();
+        assert_eq!(huge.natural_interval(), Extent1d::from_min_max(0.0, 1.0));
+        // above i64::MAX a multiplicity adds no knot, as upstream's `long`
+        assert!(BSplineCurve::create_canonical(&data(&[2, usize::MAX])).is_err());
+    }
 
     fn cubic() -> BSplineCurve {
         let pw = vec![
