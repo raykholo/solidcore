@@ -715,10 +715,7 @@ pub fn map_to_2d_on_curve(
 ) -> Result<f64> {
     // the same-surface SmCrvOnSurf branch evaluates the curve's own UV curve (an identity
     // test on the base surface that the port cannot make)
-    if matches!(
-        trim_curve.kind(),
-        crate::curve::curve::CurveKind::CrvOnSurf(_)
-    ) {
+    if matches!(trim_curve.kind(), CurveKind::CrvOnSurf(_)) {
         // UNPORTED(surface.surface_p1): SmTol::MapTo2d (SmCrvOnSurf branch, SmTol.cpp:1118-1123)
         return Err(SolidError::unported(
             "SmTol::MapTo2d(SmCrvOnSurf)",
