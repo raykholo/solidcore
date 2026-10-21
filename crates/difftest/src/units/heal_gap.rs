@@ -864,10 +864,9 @@ fn topo_rust(k: &Kernel, b: &mut Brep, args: &[f64]) -> Result<Vec<f64>, SolidEr
 
 // ---- run ---------------------------------------------------------------------------------
 
-fn run_cpp(i: &Inputs) -> Result<Output, HarnessError> {
-    let call = |op: Op, input: &[f64]| {
-        ffi::eval(op, input).map_err(|e| harness(format!("c++: {e}")))
-    };
+/// The shim input of a geometry op (every input but [`Inputs::Topo`]): its op and the
+/// flat input both sides check with [`ffi::check`].
+fn encoded(i: &Inputs) -> Result<Option<(Op, Vec<f64>)>, HarnessError> {
     let mut o = Vec::new();
     match i {
         Inputs::Gf {
@@ -882,20 +881,20 @@ fn run_cpp(i: &Inputs) -> Result<Output, HarnessError> {
             o.extend([flag(set_cnt.is_some()), su as f64, sv as f64]);
             o.extend([flag(set_tol.is_some()), set_tol.unwrap_or(0.0)]);
             o.extend([flag(*stop), f64::from(*mode)]);
-            Ok(state(call(Op::Gf, &o)?))
+            Ok(Some((Op::Gf, o)))
         }
         Inputs::Eval { gf, u, v, gu, gv } => {
             push_gf(&mut o, gf)?;
             o.extend([*u, *v]);
             o.extend([flag(gu.is_some()), gu.unwrap_or(0.0)]);
             o.extend([flag(gv.is_some()), gv.unwrap_or(0.0)]);
-            Ok(state(call(Op::Eval, &o)?))
+            Ok(Some((Op::Eval, o)))
         }
         Inputs::AddUnique { a, value } => {
             o.push(a.len() as f64);
             o.extend(a);
             o.push(*value);
-            Ok(state(call(Op::AddUnique, &o)?))
+            Ok(Some((Op::AddUnique, o)))
         }
         Inputs::Sample {
             this,
@@ -911,37 +910,52 @@ fn run_cpp(i: &Inputs) -> Result<Output, HarnessError> {
             o.extend([*tu, *tv]);
             o.extend(other);
             o.extend([*ou, *ov, f64::from(*drop), *tol]);
-            Ok(state(call(Op::Sample, &o)?))
+            Ok(Some((Op::Sample, o)))
         }
         Inputs::GapArray { a, b } => {
             o.push(a.len() as f64);
             o.extend(a);
             o.push(b.len() as f64);
             o.extend(b);
-            Ok(state(call(Op::GapArray, &o)?))
+            Ok(Some((Op::GapArray, o)))
         }
-        Inputs::Topo {
-            brep,
-            kind,
-            sel0,
-            sel1,
-            f0,
-            f1,
-            uv,
-        } => {
-            let (path, block, ex) = topo_graph(brep)?;
-            let Some(c) = counts(&ex) else {
-                return Ok(state(vec![-1.0, ex.get(1).copied().unwrap_or(0.0)]));
-            };
-            let (b, _) = import(&ex)?;
-            let args = topo_args(&b, c, *kind, *sel0, *sel1, *f0, *f1, *uv)?;
-            let out = ffi::topo(&path, &block, &args).map_err(|e| harness(format!("c++: {e}")))?;
-            Ok(state(out))
-        }
+        Inputs::Topo { .. } => Ok(None),
     }
 }
 
+fn run_cpp(i: &Inputs) -> Result<Output, HarnessError> {
+    if let Some((op, input)) = encoded(i)? {
+        let out = ffi::eval(op, &input).map_err(|e| harness(format!("c++: {e}")))?;
+        return Ok(state(out));
+    }
+    let Inputs::Topo {
+        brep,
+        kind,
+        sel0,
+        sel1,
+        f0,
+        f1,
+        uv,
+    } = i
+    else {
+        return Err(harness("geometry input without an encoding"));
+    };
+    let (path, block, ex) = topo_graph(brep)?;
+    let Some(c) = counts(&ex) else {
+        return Ok(state(vec![-1.0, ex.get(1).copied().unwrap_or(0.0)]));
+    };
+    let (b, _) = import(&ex)?;
+    let args = topo_args(&b, c, *kind, *sel0, *sel1, *f0, *f1, *uv)?;
+    let out = ffi::topo(&path, &block, &args).map_err(|e| harness(format!("c++: {e}")))?;
+    Ok(state(out))
+}
+
 fn run_rust(i: &Inputs) -> Result<Output, HarnessError> {
+    // the FFI's input check, so both sides refuse the same inputs (the Rust side would
+    // otherwise run them: a 1e300 Hermite point took it 63 s, the C++ side refuses it)
+    if let Some((op, input)) = encoded(i)? {
+        ffi::check(op, &input).map_err(|e| harness(format!("c++: {e}")))?;
+    }
     let k = Kernel::default();
     let mut o = Vec::new();
     match i {
@@ -1459,5 +1473,41 @@ impl UnitDiff for Runner {
 
     fn generate(&self, rng: &mut Rng) -> Option<Value> {
         serde_json::to_value(gen_inputs(rng)).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--fuzz 30000` fuzz14344: a Hermite end point of `1e300`, which the FFI refuses
+    /// (`MAX_COORD`). The Rust side ran it for 63 s; it now refuses it with the same
+    /// message, at once.
+    #[test]
+    fn rust_side_refuses_what_the_ffi_check_refuses() {
+        let i: Inputs = serde_json::from_value(serde_json::json!({
+            "op": "gf", "mode": 1, "set_cnt": null, "set_tol": null, "stop": false,
+            "gf": {"cnt_u": 20, "cnt_v": 2, "tol": 0.001,
+                "other": {"curve": {"hermite": {"dim": 3,
+                    "p1": [-0.5531954783408286, 1e300, -0.2148229665698027],
+                    "d1": [-0.6506806127919853, 0.8502184254319582, -0.9041050956247558],
+                    "p2": [-0.050701282389068014, -0.28420503279184883, 0.9460639514712239],
+                    "d2": [-0.8852840987021795, 0.7358319885129225, 0.32163288571458937]}}},
+                "this": {"surface": {"dom": [0.0, 0.5, 1.0, 0.5], "surface": {"curve_bounded": {
+                    "form": 0, "oob": true, "p": 1, "q": 1,
+                    "u": [0.0, 0.0, 0.299037937672884, 0.6861708197403582, 1.0, 1.0],
+                    "v": [0.0, 0.0, 1.0, 1.0],
+                    "net": [[[0.0, 0.0, -0.04733319870836744, -1.7976931348623157e308],
+                             [0.0, 1.0, 0.14490866179987155, -1.7976931348623157e308]],
+                            [[0.3333333333333333, 0.0, -0.011960123335088835, -1.7976931348623157e308],
+                             [0.3333333333333333, 1.0, -0.19189260724145366, -1.7976931348623157e308]],
+                            [[0.6666666666666666, 0.0, 0.05415441198679932, -1.7976931348623157e308],
+                             [0.6666666666666666, 1.0, -0.14845381533409757, -1.7976931348623157e308]],
+                            [[1.0, 0.0, -0.1755228662870688, -1.7976931348623157e308],
+                             [1.0, 1.0, -0.08146539893909784, -1.7976931348623157e308]]]}}}}}
+        }))
+        .unwrap();
+        let error = run_rust(&i).unwrap_err().to_string();
+        assert!(error.contains("non-finite or huge value"), "{error}");
     }
 }

@@ -321,7 +321,14 @@ fn raw_point(rd: &mut Reader<'_>) -> Result<(), FfiError> {
     Ok(())
 }
 
-fn check(op: Op, input: &[f64]) -> Result<(), FfiError> {
+/// The input check [`eval`] runs before calling the shim: `input` for geometry op `op`
+/// is well formed and inside the guard's bounds (the difftest runner's Rust side runs
+/// it too, so both sides refuse the same inputs).
+///
+/// # Errors
+///
+/// [`FfiError::InvalidArgument`] for a malformed or out-of-bounds input.
+pub fn check(op: Op, input: &[f64]) -> Result<(), FfiError> {
     let mut rd = Reader::new(input);
     match op {
         Op::Gf => {
