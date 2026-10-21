@@ -8,7 +8,9 @@ use solidcore::geom::vector2d::Point2;
 use solidcore::geom::vector3d::Vec3;
 use solidcore::kernel::Kernel;
 use solidcore::surface::surf_of_revolution::SurfOfRevolution;
+use solidcore::geom::axis2_placement::Axis2Placement;
 use solidcore::surface::surface::Surface;
+use solidcore::surface::torus::{Torus, TorusOptions};
 
 fn torus(k: &Kernel) -> SurfOfRevolution {
     let gen = Ellipse::new_circle(
@@ -62,5 +64,58 @@ fn diag_386() {
             s.step_uv_domain(),
             d
         );
+    }
+}
+
+fn residual(surf: &Surface) -> f64 {
+    let d = surf.natural_uv_domain();
+    let mut worst = 0.0f64;
+    let n = 24;
+    for i in 0..=n {
+        for j in 0..=n {
+            let u = d.min().x + (d.max().x - d.min().x) * f64::from(i) / f64::from(n);
+            let v = d.min().y + (d.max().y - d.min().y) * f64::from(j) / f64::from(n);
+            if let Ok(p) = surf.evaluate_point(solidcore::geom::vector2d::Point2::new(u, v)) {
+                let rho = (p.x * p.x + p.y * p.y).sqrt();
+                let res = ((rho - 10.0).powi(2) + p.z * p.z).sqrt() - 2.0;
+                worst = worst.max(res.abs());
+            }
+        }
+    }
+    worst
+}
+
+#[test]
+fn diag_386_torus() {
+    let k = Kernel::default();
+    let frame = Axis2Placement::new(
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    for inside_out in [false, true] {
+        for swap_uv in [false, true] {
+            for (v0, v1) in [(-23.7, 156.3), (0.0, 180.0), (336.3, 516.3), (-383.7, -203.7)] {
+                let dom = Extent2d::from_bounds(0.0, v0, 360.0, v1);
+                let opts = TorusOptions {
+                    swap_uv,
+                    inside_out,
+                    ..TorusOptions::default()
+                };
+                let t = Torus::create_canonical(&k, &frame, 10.0, 2.0, opts, Some(&dom));
+                match t {
+                    Ok(t) => {
+                        let surf = Surface::from(t.base().clone());
+                        eprintln!(
+                            "DIAG386T io={inside_out} swap={swap_uv} v=[{v0},{v1}] ok step={:?} natural={:?} worst_residual={:e}",
+                            t.base().step_uv_domain(),
+                            surf.natural_uv_domain(),
+                            residual(&surf)
+                        );
+                    }
+                    Err(e) => eprintln!("DIAG386T io={inside_out} swap={swap_uv} v=[{v0},{v1}] err={e:?}"),
+                }
+            }
+        }
     }
 }
